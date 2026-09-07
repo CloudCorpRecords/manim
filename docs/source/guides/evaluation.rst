@@ -38,8 +38,9 @@ as usual. The clock follows the same frame-rate sampling and frozen-wait roundin
 rules described in :doc:`deep_dive`.
 
 Calls to ``next_section()``, ``add_subcaption()`` and ``add_sound()`` are
-allowed and have no effect. In particular, sound files are only opened when the
-scene is rendered, so a missing or unreadable sound file goes unnoticed during
+allowed and produce no output. To record them together with the play and wait
+calls, use :doc:`timeline` capture. Sound files are only opened when the scene
+is rendered, so a missing or unreadable sound file goes unnoticed during
 evaluation.
 
 Inspection and failures
