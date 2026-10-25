@@ -349,9 +349,9 @@ class Manager(Generic[SceneT]):
 
         Notes
         -----
-        Start with a fresh scene, before playing animations or opening its
-        renderer's drawing resources or file writer. Each scene can be evaluated
-        once. Keep the frame-rate configuration used to construct it.
+        The scene must be unused: it must not have played animations, rendered,
+        or produced an image yet. Each scene can be evaluated once. Keep the
+        frame-rate configuration used to construct it.
 
         Afterward, inspect ``scene.time`` and the scene's mobjects. An explicit
         ``scene.get_image()`` call can then draw the resulting state. Image,
@@ -359,10 +359,10 @@ class Manager(Generic[SceneT]):
         raise an error instead.
 
         The manager closes on success, or at the end of an enclosing
-        ``with manager:`` block. Failures trigger cleanup and preserve the original
-        exception. No file writer, encoder, preview window, or file log is opened
-        by evaluation. User code still runs and can perform its own I/O: this is
-        not a sandbox.
+        ``with manager:`` block. If evaluation fails, the manager cleans up and
+        raises the original exception.
+
+        See :doc:`/guides/evaluation` for examples.
         """
         self._validate_execution()
         if self._evaluating:
@@ -374,7 +374,7 @@ class Manager(Generic[SceneT]):
             or getattr(self.renderer, "_target", None) is not None
             or getattr(self.renderer, "_context", None) is not None
         ):
-            raise RuntimeError("No-raster evaluation requires a cold, unused Scene.")
+            raise RuntimeError("Evaluation requires an unused Scene.")
         self._evaluation_started = True
         self._evaluating = True
         self.skip_animations = False

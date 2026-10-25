@@ -18,15 +18,15 @@ frame drawing, encoding, and preview:
 
     with tempconfig({"frame_rate": 30}):
         scene = Motion()
-        manager = scene.manager or Manager(scene)
+        manager = Manager(scene)
         manager.evaluate()
         print(scene.time)                 # 1.5
         print(scene.square.get_center())  # [1. 0. 0.]
 
-Create and evaluate the scene under the same frame-rate configuration. Start
-with a fresh scene: do not play animations or open its renderer's drawing
-resources or file writer before evaluating it. Each scene can be evaluated once;
-create another instance for another evaluation or a separate render.
+Create and evaluate the scene under the same frame-rate configuration.
+Evaluation needs an *unused* scene: one that has not played animations, rendered,
+or produced an image yet. Each scene can be evaluated once; create another
+instance for another evaluation or a separate render.
 
 What runs
 ---------
@@ -35,32 +35,22 @@ Evaluation calls ``setup()``, ``construct()`` and ``tear_down()``. Play and wait
 calls use the same animation loop as rendering with caching and skipping turned
 off: interpolation, updaters, stop conditions, and animation finish/cleanup run
 as usual. The clock follows the same frame-rate sampling and frozen-wait rounding
-rules described in :doc:`deep_dive`. Time comes from running those steps, not
-from adding up the requested animation durations.
+rules described in :doc:`deep_dive`.
 
-The manager ignores cached movie segments, animation-range selection, and skip
-flags, including those set by sections. All play calls reached by the scene's
-Python code are evaluated.
-
-Calls to ``next_section()``, ``add_subcaption()`` and ``add_sound()`` are allowed
-but have no output effect in this mode. They are not stored in a report, and
-sound files are neither checked nor decoded. A successful evaluation therefore
-does not tell you whether the same scene's audio files can be rendered.
-
-The manager does not finalize output or capture a last-frame image. It creates
-no file writer, encoder, Cairo image buffer, OpenGL context, or preview window,
-and opens no file log of its own.
+Calls to ``next_section()``, ``add_subcaption()`` and ``add_sound()`` are
+allowed and have no effect. In particular, sound files are only opened when the
+scene is rendered, so a missing or unreadable sound file goes unnoticed during
+evaluation.
 
 Inspection and failures
 -----------------------
 
 After evaluation, read ``scene.time`` and inspect the mobjects or values saved
 by your scene. The manager closes automatically unless it is inside a
-``with manager:`` block, in which case it closes when the block ends. Keeping
-the manager open does not allow a second evaluation of the same scene.
+``with manager:`` block, in which case it closes when the block ends.
 
-If evaluation fails, the manager attempts cleanup and raises the original
-exception. Changes already made to your scene are not rolled back.
+If evaluation fails, the manager cleans up and raises the original exception.
+The scene keeps the state it had reached when the error occurred.
 
 To see an image of the resulting state, request it *after* evaluation:
 
@@ -68,13 +58,12 @@ To see an image of the resulting state, request it *after* evaluation:
 
     with tempconfig({"frame_rate": 30}):
         scene = Motion()
-        manager = scene.manager or Manager(scene)
+        manager = Manager(scene)
         manager.evaluate()
         image = scene.get_image()  # Draws the current mobjects without advancing time.
 
-This separate request creates the drawing resources it needs, even though
-evaluation did not. It produces an image of the current state, including changes
-made by animation cleanup and ``tear_down()``, not a previously rendered frame.
+``get_image()`` draws the scene as it is after evaluation, including changes
+made by animation cleanup and ``tear_down()``.
 
 Limits
 ------
@@ -86,25 +75,9 @@ Limits
 * Ordinary Cairo and OpenGL mobjects whose state is computed in Python can be
   evaluated. Raw GPU-backed meshes are unsupported, and shader-only visual effects
   cannot be inspected through Python mobject state.
-* Constructing geometry, typesetting text, loading images, and running updaters
-  still take time. Evaluation does not make expensive Python code instantaneous.
-* **This is not a sandbox.** Your code can still read or write files, start
-  processes, or create an independent renderer or scene. Those operations are not
-  blocked by evaluation. Use separate processes for independent jobs and OS-level
-  sandboxing for untrusted code.
-* Choose the renderer and frame rate before constructing the scene. Normal
-  configuration validation and renderer-specific mobject classes still apply.
-
-Cairo 3D camera queries
------------------------
-
-Calls such as ``camera.project_point()`` use the camera's current angle trackers,
-even when no frame has been drawn. Reading the rotation matrix does not change
-the camera's movie-cache key: the matrix is computed from the trackers, not a
-separate camera setting.
-
-``rotation_matrix`` is read-only. To rotate the camera, change its angle trackers
-or use setters such as ``set_theta()``. Subclasses can customize
-``generate_rotation_matrix()`` rather than assigning a matrix to the property.
-If that customization depends on state beyond the angle trackers, call
-``reset_rotation_matrix()`` when those extra inputs change.
+* **This is not a sandbox.** The scene's Python code runs as usual and can read
+  or write files, start processes, or render other scenes. Use OS-level
+  sandboxing to run untrusted code.
+* Cairo 3D camera queries such as ``camera.project_point()`` reflect the
+  camera's current angles throughout evaluation. See :doc:`cameras` for how
+  the camera orientation is computed.

@@ -181,7 +181,7 @@ def test_inspection_after_evaluation_is_explicit_and_untimed(settings):
 def test_retained_static_scope_cannot_be_evaluated_twice(settings):
     with Manager(Scene()) as manager:
         manager.evaluate()
-        with pytest.raises(RuntimeError, match="cold, unused"):
+        with pytest.raises(RuntimeError, match="unused Scene"):
             manager.evaluate()
 
 

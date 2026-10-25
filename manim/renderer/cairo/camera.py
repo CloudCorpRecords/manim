@@ -606,7 +606,7 @@ class ThreeDCamera(Camera):
         self.zoom_tracker.set_value(value)
 
     def reset_rotation_matrix(self) -> None:
-        """Recompute the cached rotation matrix from the camera's current angles."""
+        """Recompute and cache the rotation matrix from the camera's current angles."""
         self._rotation_matrix_key = (self.get_phi(), self.get_theta(), self.get_gamma())
         self._rotation_matrix = self.generate_rotation_matrix()
         self._rotation_matrix.flags.writeable = False
