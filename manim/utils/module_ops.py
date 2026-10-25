@@ -23,17 +23,7 @@ if TYPE_CHECKING:
 __all__ = ["scene_classes_from_file"]
 
 
-def get_module(file_name: Path, *, source: bytes | None = None) -> types.ModuleType:
-    """Load a scene module from a file or supplied source bytes.
-
-    Parameters
-    ----------
-    file_name
-        Python source path, or ``-`` to read from stdin.
-    source
-        Source bytes to compile directly for the given file. Imported modules
-        use their normal loaders.
-    """
+def get_module(file_name: Path) -> types.ModuleType:
     if str(file_name) == "-":
         module = types.ModuleType("input_scenes")
         logger.info(
@@ -71,16 +61,7 @@ def get_module(file_name: Path, *, source: bytes | None = None) -> types.ModuleT
                 sys.modules[module_name] = module
                 sys.path.insert(0, str(file_name.parent.absolute()))
                 assert spec.loader
-                if source is None:
-                    spec.loader.exec_module(module)
-                else:
-                    # Compile the primary-file bytes identified by the report's hash.
-                    exec(
-                        compile(
-                            source, str(file_name.resolve()), "exec", dont_inherit=True
-                        ),
-                        module.__dict__,
-                    )
+                spec.loader.exec_module(module)
                 return module
             raise FileNotFoundError(f"{file_name} not found")
         else:

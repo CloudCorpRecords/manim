@@ -1,8 +1,7 @@
-"""Export timeline JSON through the CLI and consume it with the standalone reader."""
+"""Save timelines with the CLI and read them with the example reader."""
 
 import json
 import os
-import py_compile
 import subprocess
 import sys
 from pathlib import Path
@@ -14,46 +13,72 @@ class Sample(Scene):
         self.next_section("start")
         for _ in range(2):
             self.wait(.3, frozen_frame=False)
-        self.add_sound("missing.wav")
 """
 
 
-def run_cli(tmp_path, source, output, *extra):
+def run(command, cwd, timeout=60):
     return subprocess.run(
+        command,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        timeout=timeout,
+    )
+
+
+def run_cli(tmp_path, source, output, *extra):
+    return run(
         [
             sys.executable,
             "-m",
             "manim",
             "--fps",
             "4",
+            "-r",
+            "32,16",
             "--media_dir",
             str(tmp_path / "media"),
             "--timeline-output",
             str(output),
-            *extra,
             str(source),
+            *extra,
         ],
-        cwd=tmp_path,
-        capture_output=True,
-        encoding="utf-8",
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-        timeout=30,
+        tmp_path,
     )
 
 
-def test_cli_and_independent_reader(tmp_path):
+def test_dry_run_saves_an_evaluation_timeline(tmp_path):
+    source = tmp_path / "scene.py"
+    source.write_text(SOURCE)
+    output = tmp_path / "report.json"
+    result = run_cli(tmp_path, source, output, "--dry_run")
+    assert result.returncode == 0, result.stdout + result.stderr
+    data = json.loads(output.read_text())
+    assert data["mode"] == "evaluate"
+    assert data["duration"] == 1
+    assert data["source"]["path"] == "scene.py"
+    assert not list((tmp_path / "media").rglob("*.mp4"))
+
+
+def test_render_saves_a_video_and_its_timeline(tmp_path):
     source = tmp_path / "scene.py"
     source.write_text(SOURCE)
     output = tmp_path / "report.json"
     result = run_cli(tmp_path, source, output)
     assert result.returncode == 0, result.stdout + result.stderr
     data = json.loads(output.read_text())
-    assert data["end"] == 1
-    assert data["source"]["path"] == "scene.py"
-    assert "before-loading" in data["source"]["provenance"]
-    assert not (tmp_path / "media").exists()
-    assert "output" not in data
+    assert data["mode"] == "render"
+    assert [entry["kind"] for entry in data["entries"]] == ["section", "wait", "wait"]
+    assert list((tmp_path / "media").rglob("Sample.mp4"))
 
+
+def test_reader_prints_entries_and_detects_source_changes(tmp_path):
+    source = tmp_path / "scene.py"
+    source.write_text(SOURCE)
+    output = tmp_path / "report.json"
+    assert run_cli(tmp_path, source, output, "--dry_run").returncode == 0
     html = tmp_path / "view.html"
     command = [
         sys.executable,
@@ -65,57 +90,28 @@ def test_cli_and_independent_reader(tmp_path):
         "--html",
         str(html),
     ]
-    reader = subprocess.run(
-        command,
-        capture_output=True,
-        encoding="utf-8",
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-        timeout=10,
-    )
+    reader = run(command, tmp_path)
     assert reader.returncode == 0, reader.stderr
-    assert "event-000000 wait" in reader.stdout
-    assert "source matches captured bytes" in reader.stdout
-    assert "event-000001" in html.read_text()
+    assert "source unchanged" in reader.stdout
+    assert "wait 0.000–0.500s · scene.py:6" in reader.stdout
+    assert "section &#x27;start&#x27;" in html.read_text()
     source.write_text(SOURCE + "\n# edited\n")
-    stale = subprocess.run(
-        command,
-        capture_output=True,
-        encoding="utf-8",
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-        timeout=10,
-    )
-    assert "source STALE" in stale.stdout
+    assert "source changed" in run(command, tmp_path).stdout
 
 
-def test_cli_executes_captured_primary_bytes_not_stale_bytecode(tmp_path):
-    source = tmp_path / "scene.py"
-    old = "from manim import *\nclass Sample(Scene):\n    def construct(self):\n        self.wait(1, frozen_frame=False)\n"
-    source.write_text(old)
-    stamp = source.stat()
-    py_compile.compile(str(source), doraise=True)
-    source.write_text(old.replace("wait(1", "wait(2"))
-    os.utime(source, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
-    output = tmp_path / "report.json"
-    result = run_cli(tmp_path, source, output)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert json.loads(output.read_text())["end"] == 2
-
-
-def test_cli_failure_preserves_previous_report_and_rejects_batches(tmp_path):
+def test_failure_keeps_the_previous_report_and_batches_are_rejected(tmp_path):
     source = tmp_path / "scene.py"
     output = tmp_path / "report.json"
     source.write_text(SOURCE)
-    assert run_cli(tmp_path, source, output).returncode == 0
+    assert run_cli(tmp_path, source, output, "--dry_run").returncode == 0
     previous = output.read_bytes()
-    source.write_text(
-        SOURCE.replace('self.add_sound("missing.wav")', 'raise RuntimeError("broken")')
-    )
-    failed = run_cli(tmp_path, source, output)
+    source.write_text(SOURCE + '        raise RuntimeError("broken")\n')
+    failed = run_cli(tmp_path, source, output, "--dry_run")
     assert failed.returncode != 0
     assert "broken" in failed.stdout + failed.stderr
     assert output.read_bytes() == previous
     source.write_text(SOURCE + "\nclass Another(Scene):\n    pass\n")
-    result = run_cli(tmp_path, source, output)
+    result = run_cli(tmp_path, source, output, "--dry_run", "Sample", "Another")
     assert result.returncode != 0
     assert "exactly one" in result.stdout + result.stderr
     assert output.read_bytes() == previous

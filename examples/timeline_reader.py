@@ -1,7 +1,6 @@
-"""Read an experimental timeline and optionally create an HTML view.
+"""Print a Manim timeline and optionally write an HTML view of it.
 
-Uses Python's standard library to read the report and check its primary source file.
-Example: python examples/timeline_reader.py report.json --source-root path/to/scenes --html view.html
+Example: python examples/timeline_reader.py timeline.json --source-root example_scenes --html timeline.html
 """
 
 import argparse
@@ -12,99 +11,90 @@ from pathlib import Path
 
 
 def read_timeline(path):
-    """Check the version, completion flag and content hash, then return the data."""
+    """Read a timeline file and check its schema and version."""
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    if (
-        not isinstance(data, dict)
-        or type(data.get("version")) is not int
-        or data.get("complete") is not True
-    ):
-        raise ValueError("Unsupported timeline document")
-    if (data.get("schema"), data.get("version"), data.get("complete")) != (
-        "manim.execution-timeline",
-        1,
-        True,
-    ):
-        raise ValueError("Unsupported or incomplete timeline")
-    revision = data.pop("revision", None)
-    content = json.dumps(
-        data, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
-    )
-    if hashlib.sha256(content.encode("utf-8")).hexdigest() != revision:
-        raise ValueError("Timeline content revision mismatch")
-    data["revision"] = revision
+    if data.get("schema") != "manim.timeline" or data.get("version") != 1:
+        raise ValueError("Expected a manim.timeline document with version 1.")
     return data
 
 
 def source_status(data, root):
-    """Compare the primary file on disk with its recorded hash, when available."""
+    """Describe whether the primary source file still matches the timeline."""
     source = data["source"]
-    if root is None or source["path"] is None:
-        return "source unverified"
-    root = Path(root).resolve()
-    path = (root / source["path"]).resolve()
-    if not path.is_relative_to(root) or not path.is_file():
-        return "source unavailable"
+    if root is None or source is None:
+        return "source not checked"
+    path = Path(root) / source["path"]
+    if not path.is_file():
+        return "source not found"
     if hashlib.sha256(path.read_bytes()).hexdigest() != source["sha256"]:
-        return "source STALE"
-    if (
-        source.get("provenance")
-        == "captured-before-loading-primary-bytes-compiled-directly"
-    ):
-        return "source matches captured bytes (primary compiled directly; dependencies unverified)"
-    return "source matches captured bytes (loaded-code identity not proven)"
+        return "source changed since the timeline was recorded"
+    return "source unchanged"
+
+
+def location(entry):
+    source = entry["source"] or {}
+    return f"{source.get('path') or '?'}:{source.get('line') or '?'}"
+
+
+def describe(entry):
+    kind = entry["kind"]
+    if kind in ("play", "wait"):
+        span = f"{entry['start']:.3f}–{entry['end']:.3f}s"
+        return f"{kind} {span}" + (" (skipped)" if entry["skipped"] else "")
+    if kind == "section":
+        return f"section {entry['name']!r} at {entry['start']:.3f}s"
+    if kind == "caption":
+        return f"caption {entry['content']!r} {entry['start']:.3f}–{entry['end']:.3f}s"
+    length = "" if entry["duration"] is None else f" for {entry['duration']:.3f}s"
+    return f"sound {entry['file']} at {entry['start']:.3f}s{length}"
 
 
 def render_html(data, status, root=None):
-    total = max(data["end"] - data["start"], 1e-9)
+    total = max(data["duration"], 1e-9)
     rows = []
-    for event in data["events"]:
-        source = event["source"] or {}
-        location = f"{source.get('path') or '?'}:{source.get('line') or '?'}"
-        left = 100 * (event["start"] - data["start"]) / total
-        width = 100 * (event["end"] - event["start"]) / total
-        label = f"{event['id']} {event['kind']} {event['start']:.3f}–{event['end']:.3f}s {location}"
-        label_html = html.escape(label)
-        if root is not None and source.get("path") and source.get("line"):
-            directory = Path(root).resolve()
-            target = (directory / source["path"]).resolve()
-            if target.is_relative_to(directory):
-                url = f"{target.as_uri()}#L{int(source['line'])}"
-                label_html = (
-                    f'<a href="{html.escape(url, quote=True)}">{label_html}</a>'
-                )
-        rows.append(
-            f"<li>{label_html}<div class='track'><span style='margin-left:{left:.4f}%;width:{width:.4f}%'></span></div></li>"
-        )
-    declarations = html.escape(
-        json.dumps(data["declarations"], indent=2, ensure_ascii=False)
-    )
+    for entry in data["entries"]:
+        label = html.escape(f"{describe(entry)} · {location(entry)}")
+        source = entry["source"]
+        if root is not None and source and source["path"]:
+            url = (
+                f"{(Path(root) / source['path']).resolve().as_uri()}#L{source['line']}"
+            )
+            label = f'<a href="{html.escape(url, quote=True)}">{label}</a>'
+        bar = ""
+        if entry["kind"] in ("play", "wait", "caption"):
+            left = 100 * entry["start"] / total
+            width = 100 * (entry["end"] - entry["start"]) / total
+            bar = (
+                f"<div class='track'><span class='{entry['kind']}' "
+                f"style='margin-left:{left:.4f}%;width:{width:.4f}%'></span></div>"
+            )
+        rows.append(f"<li>{label}{bar}</li>")
     return (
-        "<!doctype html><meta charset='utf-8'><title>Execution timeline</title>"
-        "<style>body{font:16px sans-serif;max-width:1000px;margin:2em auto}.track{background:#eee}"
-        ".track span{display:block;height:12px;background:#2980b9}li{margin:1em 0}</style>"
-        f"<h1>{html.escape(data['scene']['name'])}</h1><p>{html.escape(status)}</p>"
-        f"<ol>{''.join(rows)}</ol><h2>Declarations (sound duration may be unknown)</h2><pre>{declarations}</pre>"
+        "<!doctype html><meta charset='utf-8'><title>Manim timeline</title>"
+        "<style>body{font:16px sans-serif;max-width:1000px;margin:2em auto}"
+        ".track{background:#eee}.track span{display:block;height:12px;"
+        "background:#2980b9}.track span.caption{background:#8e44ad}"
+        "li{margin:1em 0}</style>"
+        f"<h1>{html.escape(data['scene'])}</h1><p>{html.escape(status)}</p>"
+        f"<ol>{''.join(rows)}</ol>"
     )
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("timeline", type=Path)
-    parser.add_argument("--source-root", type=Path)
-    parser.add_argument("--html", type=Path)
+    parser.add_argument(
+        "--source-root",
+        type=Path,
+        help="Directory of the scene's source file, used to check it and link to it.",
+    )
+    parser.add_argument("--html", type=Path, help="Write an HTML view to this file.")
     args = parser.parse_args()
     data = read_timeline(args.timeline)
     status = source_status(data, args.source_root)
-    print(f"{data['scene']['name']}: {data['end'] - data['start']:.3f}s; {status}")
-    for event in data["events"]:
-        source = event["source"] or {}
-        print(
-            f"{event['id']} {event['kind']} {event['start']:.3f}..{event['end']:.3f} "
-            f"{source.get('path') or '?'}:{source.get('line') or '?'}"
-        )
-    for declaration in data["declarations"]:
-        print(f"{declaration['kind']} at {declaration['at']:.3f}")
+    print(f"{data['scene']}: {data['duration']:.3f}s ({data['mode']}); {status}")
+    for entry in data["entries"]:
+        print(f"{describe(entry)} · {location(entry)}")
     if args.html:
         args.html.write_text(
             render_html(data, status, args.source_root), encoding="utf-8"

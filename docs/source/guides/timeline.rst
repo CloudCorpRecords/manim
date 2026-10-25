@@ -1,10 +1,14 @@
-Export an execution timeline
-============================
+Export a scene timeline
+=======================
 
-A timeline records when a scene's play and wait calls ran during
-:doc:`evaluation`, how many animation steps were processed, and where sections,
-captions, and sounds were requested. The format and Python API are
-**experimental** and may change without a deprecation period.
+A *timeline* lists the play, wait, section, caption, and sound calls of a scene,
+with the scene time at which each call happened and the line of code that made
+it. Manim can record a timeline while it renders a scene, or while it
+:doc:`evaluates <evaluation>` the scene without rendering, which is much faster.
+Tools such as editor previews use timelines to show the structure of a scene.
+
+The format and Python API are **experimental** and may change without a
+deprecation period.
 
 From Python
 -----------
@@ -21,20 +25,21 @@ From Python
 
     with tempconfig({"frame_rate": 4}):
         scene = Example()
-        manager = scene.manager or Manager(scene)
+        manager = Manager(scene)
         manager.evaluate(capture_timeline=True)
-        timeline = manager.timeline
-        for event in timeline.to_dict()["events"]:
-            print(event["kind"], event["start"], event["end"])
-        timeline.write("timeline.json")
+        for entry in manager.timeline.to_dict()["entries"]:
+            print(entry["kind"], entry["start"], entry.get("end"))
+        manager.timeline.write("timeline.json")
 
-This prints ``wait 0.0 0.5`` and ``wait 0.5 0.75``. The first wait takes two
-animation steps at 4 fps; the frozen wait occupies one frame interval.
+This prints ``section 0.0 None``, ``wait 0.0 0.5`` and ``wait 0.5 0.75``. At
+4 fps, the first wait takes two frames; the frozen wait shows a single frame for
+0.25 seconds.
 
-Pass ``capture_timeline=True`` to evaluation, then read ``manager.timeline``
-after it returns successfully. The returned :class:`.Timeline` is immutable:
-``to_dict()`` gives you an independent dictionary, ``to_json()`` returns the
-JSON text, and ``write()`` saves the captured report to disk.
+Pass ``capture_timeline=True`` to :meth:`.Manager.evaluate` or
+:meth:`.Manager.render`, then read :attr:`.Manager.timeline`. The
+:class:`.Timeline` object cannot be modified: ``to_dict()`` returns its data as
+a new dictionary that you can edit, ``to_json()`` returns the JSON text, and
+``write()`` saves it to a file.
 
 From the command line
 ---------------------
@@ -43,103 +48,135 @@ From the repository root, try the included example:
 
 .. code-block:: console
 
-    manim --fps 4 --timeline-output timeline.json example_scenes/timeline_scene.py TimelineExample
+    manim --fps 4 --dry_run --timeline-output timeline.json example_scenes/timeline_scene.py TimelineExample
 
-``--timeline-output`` calls :meth:`.Manager.evaluate` with capture enabled and
-writes the resulting JSON. Supply a source file and select exactly one scene.
-Evaluation runs all play calls reached by the scene's Python code, following the
-behavior described in :doc:`evaluation`.
+``--timeline-output`` saves the timeline of one scene to the given path. With
+``--dry_run``, Manim evaluates the scene without rendering it. Without
+``--dry_run``, Manim renders the scene as usual and records the timeline of that
+render. The timeline is only written if the run succeeds.
 
-A relative output path is resolved from the directory where the command was
-invoked, before scene code can change the working directory. The command waits
-for evaluation and manager cleanup, checks the primary source file, then writes
-a temporary JSON file and replaces the destination. If evaluation fails or is
-cancelled before publication, an existing report stays in place and continues
-to describe its original execution.
+Reading a timeline
+------------------
 
-Standalone reader
------------------
-
-The repository also includes a reader that uses only Python's standard library:
+The repository includes a small reader script:
 
 .. code-block:: console
 
     python examples/timeline_reader.py timeline.json --source-root example_scenes --html timeline.html
 
-It prints events and source locations, and optionally writes an HTML timeline
-with source-file links and the recorded section, caption, and sound calls.
-``--source-root`` tells it where to look for those files. It compares the primary
-file's bytes with the recorded hash and labels a mismatch as stale. After editing
-the source, export a fresh timeline to get current line locations. Whether a
-file link opens at its line number depends on the viewer.
+It prints the entries and their source lines. With ``--html``, it also writes an
+HTML view with links to the source lines. ``--source-root`` is the directory
+that contains the scene's source file. The reader uses it to find the file and
+to check whether it has changed since the timeline was recorded.
 
-What the report contains
-------------------------
+Timeline format
+---------------
 
-* ``policy`` is ``no-raster-full``, identifying the evaluation mode used for
-  capture. ``complete`` is true for a completed capture. ``termination`` is
-  ``completed`` for ordinary completion, or ``scene-end-request`` when
-  ``construct()`` ends with a handled ``EndSceneEarlyException``.
-* Each event represents one play or wait call. It includes an ID, play index
-  (``ordinal``), kind, requested duration (``nominal_duration``), observed
-  ``start`` and ``end`` times in seconds, and top-level animation types/run times.
-* ``samples`` counts animation steps; ``hold_intervals`` counts the frame
-  intervals occupied by a frozen wait. In the Python example these are
-  ``(2, 0)`` and ``(0, 1)``. When a stop condition ends a wait early, ``end``
-  records the time reached by that wait.
-* ``declarations`` contains section, caption, and sound calls. Their ``at`` time
-  records when the call happened; placement can differ because of an offset.
-  Captions have resolved ``start`` and ``end`` times. Sounds have a ``start``;
-  ``duration`` is null to indicate an unknown duration. Relative sound paths
-  retain the requested string. Sound options must be JSON-serializable.
-* Events and declarations share an ``order`` counter. A declaration's
-  ``event_id`` refers to a play being prepared or executed, or is null outside
-  one. ``event_boundary`` is the number of completed plays when it was declared.
+A timeline is a JSON object. All times are scene times in seconds. The same
+scene, run with the same settings, gives the same JSON text.
 
-Source locations and source checks
-----------------------------------
+.. code-block:: json
 
-Source hints identify a file and line on a best-effort basis. ``occurrence``
-distinguishes repeated calls at the same site within a capture. Use these
-locations with the source revision recorded in the report.
+    {
+      "schema": "manim.timeline",
+      "version": 1,
+      "mode": "evaluate",
+      "scene": "TimelineExample",
+      "backend": "CairoRenderer",
+      "frame_rate": 4.0,
+      "duration": 2.25,
+      "ended_early": false,
+      "source": {"path": "timeline_scene.py", "sha256": "30b191df…"},
+      "entries": [
+        {"kind": "section", "start": 0.0, "name": "opening",
+         "type": "default.normal", "skip_animations": false,
+         "source": {"path": "timeline_scene.py", "line": 11}},
+        {"kind": "play", "start": 0.0, "end": 0.5, "run_time": 0.3,
+         "frozen": false, "animations": [{"type": "manim.animation.transform._MethodAnimation",
+                         "run_time": 0.3}],
+         "skipped": false,
+         "source": {"path": "timeline_scene.py", "line": 12}},
+        {"kind": "caption", "start": 0.0, "end": 0.5, "content": "move",
+         "source": {"path": "timeline_scene.py", "line": 12}}
+      ]
+    }
 
-The source root is the primary source file's directory. Paths within that root
-are relative to it. Outside-root locations provide a display basename and a null
-``path``; absolute sound paths outside the root use the same treatment. Generated
-or unavailable locations are marked in the source metadata.
+Top-level fields
+^^^^^^^^^^^^^^^^
 
-The recorded source hash and the reader's source-status check cover the primary
-file. The CLI and Python API obtain its contents at different points:
+``schema``
+    Always ``"manim.timeline"``.
+``version``
+    The format version. This page describes version ``1``.
+``mode``
+    ``"evaluate"`` if the timeline was recorded by :meth:`.Manager.evaluate`,
+    or ``"render"`` if it was recorded while rendering.
+``scene``
+    The name of the scene class.
+``backend``
+    The class name of the scene's renderer, for example ``"CairoRenderer"``.
+``frame_rate``
+    The frame rate of the run.
+``duration``
+    The scene time when the run ended.
+``ended_early``
+    ``true`` if the scene ended early by raising ``EndSceneEarlyException``,
+    for example because of the ``-n`` option.
+``source``
+    The scene's *source file*, the file that defines the scene class: its
+    ``path`` (the file name) and the ``sha256`` hash of its contents. ``null``
+    if the scene class has no source file.
+``entries``
+    One entry for each play, wait, section, caption, and sound call, in the order
+    in which the calls were made. Captions passed to ``play()`` with
+    ``subcaption=...`` follow their play entry.
 
-* The CLI reads the primary file before loading it and compiles those captured
-  bytes. It checks the file again after loading, evaluation, and manager cleanup
-  before saving.
-* Python capture reads the scene class's source file from disk before evaluation,
-  when available. Load your scene class from the current source before evaluating
-  it in Python.
+Entries
+^^^^^^^
 
-Format and content revision
----------------------------
+Each entry has a ``kind``, a ``start`` time, and a ``source``: the ``path`` of
+the file and the ``line`` of the call in the scene's code. ``path`` is relative
+to the directory of the scene's source file, or ``null`` for a file outside that
+directory. ``source`` is ``null`` if the call was not made from a file, for
+example from code run with ``exec()``.
 
-Version 1 uses ``schema = "manim.execution-timeline"`` and integer ``version = 1``.
-:meth:`.Timeline.from_json` checks the schema name, version, completion flag,
-and content revision.
+The other fields depend on the kind:
 
-``revision`` is the SHA-256 hash of the document without its ``revision`` field,
-serialized with Python's ``json.dumps`` using ``sort_keys=True``,
-``separators=(",", ":")``, ``ensure_ascii=False``, and ``allow_nan=False``, then
-encoded as UTF-8. The hash is computed before ``to_json()`` appends its trailing
-newline. Readers in other languages must preserve this representation: for
-example, changing ``4.0`` to ``4`` changes the hash even though they compare
-numerically equal. Use the revision to identify a particular report's content.
+``play`` and ``wait``
+    ``end``
+        The scene time when the call ended. It can differ from ``start +
+        run_time`` because animations are rounded to whole frames, and because
+        a stop condition can end a wait early.
+    ``run_time``
+        The requested run time.
+    ``frozen``
+        ``true`` for a wait that shows a single unchanging frame, such as
+        ``self.wait()`` without updaters. Manim draws such a wait once and repeats
+        that frame.
+    ``animations``
+        The animations of the call, each with its ``type`` (class name) and
+        ``run_time``. A wait has a single :class:`.Wait` animation.
+    ``skipped``
+        ``true`` if the call is left out of the rendered output, for example
+        because of the ``-n`` option or a section with ``skip_animations=True``.
+        Always ``false`` in an evaluation timeline.
+``section``
+    ``name``, ``type`` (the section type), and ``skip_animations``.
+``caption``
+    ``end``, the time at which the caption disappears, and ``content``. The
+    ``start`` and ``end`` times include the caption's offset.
+``sound``
+    ``file`` (the requested path), ``duration`` (``null`` if unknown), ``gain``,
+    and ``options`` (other keyword arguments of ``add_sound()``). The ``start``
+    time includes the sound's time offset. In version 1, ``duration`` is always
+    ``null``.
+
+Arguments of section, caption, and sound calls must be JSON-serializable.
 
 Capture errors
 --------------
 
-Timeline capture requires sequential play/wait calls and finite, nondecreasing
-animation time. The recorder checks time at samples, declarations, event
-boundaries, and completion. An unfinished event or a declaration-recording
-failure leaves the capture incomplete. To obtain a new report after an error,
-fix the cause and evaluate a fresh scene.
-
-See :doc:`evaluation` for the underlying execution behavior and requirements.
+Timeline capture fails if scene time is not finite or goes backwards, if a play
+or wait call is made while another one is running, for example from an updater,
+or if the arguments of a section, caption, or sound call cannot be stored as
+JSON. After an error, fix the cause and run a new scene instance.

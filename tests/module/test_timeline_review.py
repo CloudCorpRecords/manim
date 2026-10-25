@@ -1,11 +1,11 @@
-"""Validate captured clocks, event completion, and declaration placement offsets."""
+"""Check scene time during timeline capture and the placement of offset calls."""
 
 import pytest
 
 from manim import Manager, Scene, tempconfig
 
 
-def test_backwards_observed_time_cannot_publish():
+def test_time_going_backwards_fails_the_capture():
     class Rewinds(Scene):
         def construct(self):
             self.wait(1, frozen_frame=False)
@@ -14,13 +14,13 @@ def test_backwards_observed_time_cannot_publish():
 
     with tempconfig({"format": "none", "frame_rate": 4, "progress_bar": "none"}):
         manager = Manager(Rewinds())
-        with pytest.raises(ValueError, match="backwards"):
+        with pytest.raises(ValueError, match="goes backwards"):
             manager.evaluate(capture_timeline=True)
         with pytest.raises(RuntimeError, match="No completed"):
             manager.timeline
 
 
-def test_declaration_placement_offsets_are_not_clock_rewinds():
+def test_offsets_move_sounds_and_captions_but_not_the_clock():
     class Offsets(Scene):
         def construct(self):
             self.wait(1, frozen_frame=False)
@@ -33,5 +33,6 @@ def test_declaration_placement_offsets_are_not_clock_rewinds():
         manager = Manager(Offsets())
         manager.evaluate(capture_timeline=True)
     data = manager.timeline.to_dict()
-    assert data["end"] == 2
-    assert [item["start"] for item in data["declarations"]] == [0.5, 3, 0]
+    assert data["duration"] == 2
+    calls = [entry for entry in data["entries"] if entry["kind"] != "wait"]
+    assert [entry["start"] for entry in calls] == [0.5, 3, 0]

@@ -1,4 +1,7 @@
-"""Metadata-only example: manim --fps 4 --timeline-output timeline.json timeline_scene.py TimelineExample."""
+"""Scene for trying out timeline export.
+
+manim --fps 4 --timeline-output timeline.json example_scenes/timeline_scene.py TimelineExample
+"""
 
 from manim import RIGHT, Scene, Square
 
@@ -12,5 +15,5 @@ class TimelineExample(Scene):
         self.wait(0.3, frozen_frame=True)
         start = self.time
         self.wait(1, stop_condition=lambda: self.time >= start + 0.5)
-        # A declaration, not a decoded asset, in metadata-only evaluation.
+        # Only recorded in the timeline; example.wav is a placeholder.
         self.add_sound("example.wav")
